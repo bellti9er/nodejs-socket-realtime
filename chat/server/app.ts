@@ -3,6 +3,7 @@ import http from 'http';
 import express, { Express } from 'express';
 import { Server, Socket   } from 'socket.io';
 
+import Database                         from './database';
 import { wrapSocketAsync, CustomError } from './utils/error';
 import {
   ChatRoom,
@@ -11,12 +12,15 @@ import {
 } from './models'
 
 export class ChatApp {
-  public app    : Express;
-  public server : http.Server;
-  public io     : Server;
+  public app        : Express;
+  public server     : http.Server;
+  public io         : Server;
+  private userCount : number = 1;
+  private db        : Database
 
-  constructor() {
+  constructor(db: Database) {
     this.app    = express();
+    this.db     = db;
     this.server = http.createServer(this.app);
     this.io     = new Server(this.server, {
       cors: {
@@ -27,84 +31,91 @@ export class ChatApp {
     this.initChatRoom();
   }
 
-  public initSocket() {
-    console.log("Initializing Socket . . .");
-
-    let userCount = 1;
-
-    this.io.on('connection', async (socket: Socket) => {
-      console.log('New user connected');
-
-      const roomNumber = await ChatRoom.estimatedDocumentCount();
-      let   username   = `Anonymous-${userCount++}`;
-
-      // Notify new connection
-      this.io.emit('new_connect', username);
-
-      const newUser = new User({ username, roomNumber });
-
-      await newUser.save();
-
-      // Handle username change
-      socket.on('change_username', wrapSocketAsync(socket, async (data: { username: string }) => {
-        console.log(`User changed username from ${username} to ${data.username}`);
-
-        const user = await User.findOne({ username });
-
-        if(!user) throw new CustomError(404, 'User Not Found');
-
-        user.username = data.username;
-        user.nicknameHistory.push({
-          nickname  : data.username,
-          changedAt : new Date()
-        })
-
-        await user.save();
-
-        this.io.emit('username_changed', data.username);
-      }));
-
-      // Handle user disconnect
-      socket.on('disconnect', () => {
-        console.log('User disconnected');
-
-        this.io.emit('new_disconnect', username);
-      });
-
-      // Handle message send
-      socket.on('send_message', wrapSocketAsync(socket, async (message: string) => {
-        if (!message) throw new CustomError(400, 'Message content is undefined');
-
-        const user = await User.findOne({ username, roomNumber });
-        
-        if(!user) throw new CustomError(404, 'User Not Found');
-
-        this.io.emit('receive_message',`${username} : ${message}`);
-
-        const newMessage = new Message({
-          sender  : username,
-          content : message
-        });
-
-        await newMessage.save();
-
-        let chatRoom = await ChatRoom.findOne( { roomNumber });
-
-        if (!chatRoom) {
-          chatRoom = new ChatRoom({ roomNumber });
-          await chatRoom.save();
-        }
-
-        chatRoom.messages.push(newMessage._id);
-
-        await chatRoom.save();
-      }));
-    });
+  public async initSocket() {
+    this.io.on('connection', (socket: Socket) => this.handleConnection(socket));
   }
 
   private async initChatRoom() {
     const newRoomNumber = await ChatRoom.estimatedDocumentCount() + 1;
+
+    await new ChatRoom({ roomNumber: newRoomNumber}).save();
+
+    return newRoomNumber
+  }
+
+  private async handleConnection(socket: Socket) {
+    const { username, roomNumber } = await this.initNewUser();
+    socket.data = { username, roomNumber };
+
+    socket.on('send_message', wrapSocketAsync((message: string) => this.handleSendMessage(socket, message)));
+    socket.on('change_username', wrapSocketAsync((data: { username: string }) => this.handleChangeUsername(socket, data.username)));
+    socket.on('disconnect', wrapSocketAsync(() => this.handleDisconnect(socket)));
+  }
+
+  private async initNewUser() {
+    const roomNumber = await ChatRoom.estimatedDocumentCount();
+    const username   = `Anonymous-${this.userCount++}`;
+
+    this.io.emit('new_connect', username);
+
+    const newUser = new User({ username, roomNumber });
+
+    await newUser.save();
+
+    return { username, roomNumber };
+  }
+
+  private async handleSendMessage(socket: Socket, message: string) {
+    const { username, roomNumber } = socket.data;
+
+    if (!message) throw new CustomError(400, 'Message content is undefined');
     
-    new ChatRoom({ roomNumber: newRoomNumber }).save();
+    const user = await User.findOne({ username, roomNumber });
+    
+    if(!user) throw new CustomError(404, 'User Not Found');
+    
+    this.io.emit('receive_message',`${username} : ${message}`);
+    
+    const newMessage = new Message({
+      sender  : username,
+      content : message
+    });
+    
+    await newMessage.save();
+    
+    const chatRoom = await ChatRoom.findOne( { roomNumber });
+    
+    chatRoom!.messages.push(newMessage._id);
+    
+    await chatRoom!.save();
+  }
+
+  private async handleChangeUsername(socket: Socket, changedUsername: string) {
+    const { username, roomNumber } = socket.data;
+
+    console.log(`User changed username from ${username} to ${changedUsername}`);
+    
+    const user = await User.findOne({ username, roomNumber });
+    
+    if(!user) throw new CustomError(404, 'User Not Found');
+    
+    user.nicknameHistory.push({
+      nickname  : changedUsername,
+      changedAt : new Date()
+    })
+    
+    await user.save();
+    
+    this.io.emit('username_changed', changedUsername);
+
+    socket.data.username = changedUsername;
+  }
+
+  private async handleDisconnect(socket: Socket) {
+    const { username } = socket.data;
+
+    console.log('User disconnected');
+    
+    this.io.emit('new_disconnect', username);
   }
 }
