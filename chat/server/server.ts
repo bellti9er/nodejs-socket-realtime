@@ -9,10 +9,11 @@ import Database         from './database';
 
 const startServer = async() => {
   const port     : number   = (process.env.PORT! || 8080) as number
-  const chatApp  : ChatApp  = new ChatApp();
   const database : Database = new Database(process.env.MONGO_URI!)
 
   await database.connect();
+
+  const chatApp: ChatApp = new ChatApp(database);
 
   chatApp.app.use(morgan('dev'));
   chatApp.app.use(cors());
