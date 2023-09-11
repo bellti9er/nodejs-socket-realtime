@@ -24,7 +24,7 @@ export class ChatApp {
     this.server = http.createServer(this.app);
     this.io     = new Server(this.server, {
       cors: {
-        origin: process.env.ALLOWED_HOSTS?.split(',') || "*",
+        origin: "*",
         methods: ["GET", "POST"]
       }
     });
@@ -32,6 +32,8 @@ export class ChatApp {
   }
 
   public async initSocket() {
+    console.log("Initializing Socket . . .");
+
     this.io.on('connection', (socket: Socket) => this.handleConnection(socket));
   }
 
@@ -47,9 +49,9 @@ export class ChatApp {
     const { username, roomNumber } = await this.initNewUser();
     socket.data = { username, roomNumber };
 
-    socket.on('send_message', wrapSocketAsync((message: string) => this.handleSendMessage(socket, message)));
-    socket.on('change_username', wrapSocketAsync((data: { username: string }) => this.handleChangeUsername(socket, data.username)));
-    socket.on('disconnect', wrapSocketAsync(() => this.handleDisconnect(socket)));
+    socket.on('send_message', wrapSocketAsync(socket, (message: string) => this.handleSendMessage(socket, message)));
+    socket.on('change_username', wrapSocketAsync(socket, (data: { username: string }) => this.handleChangeUsername(socket, data.username)));
+    socket.on('disconnect', wrapSocketAsync(socket, () => this.handleDisconnect(socket)));
   }
 
   private async initNewUser() {
@@ -61,6 +63,8 @@ export class ChatApp {
     const newUser = new User({ username, roomNumber });
 
     await newUser.save();
+
+    console.log('New user connected');
 
     return { username, roomNumber };
   }
@@ -93,8 +97,6 @@ export class ChatApp {
   private async handleChangeUsername(socket: Socket, changedUsername: string) {
     const { username, roomNumber } = socket.data;
 
-    console.log(`User changed username from ${username} to ${changedUsername}`);
-    
     const user = await User.findOne({ username, roomNumber });
     
     if(!user) throw new CustomError(404, 'User Not Found');
@@ -103,12 +105,15 @@ export class ChatApp {
       nickname  : changedUsername,
       changedAt : new Date()
     })
+
+    user.username        = changedUsername;
+    socket.data.username = changedUsername;
     
     await user.save();
-    
-    this.io.emit('username_changed', changedUsername);
 
-    socket.data.username = changedUsername;
+    console.log(`User changed username from ${username} to ${changedUsername}`);
+    
+    this.io.emit('username_changed', { oldUsername: username, newUsername: changedUsername });
   }
 
   private async handleDisconnect(socket: Socket) {
