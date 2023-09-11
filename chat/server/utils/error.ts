@@ -1,15 +1,17 @@
 import { Socket } from 'socket.io';
 
-export const wrapSocketAsync = (fn: Function) => {
+export const wrapSocketAsync = (socket: Socket, fn: Function) => {
   return async (...args: any[]) => {
     try {
       await fn(...args);
     } catch (err) {
       console.error(err);
-      
-      const socket = args[0];
 
-      if (err instanceof CustomError) socket.emit('error', { statusCode: err.statusCode, message: err.message });
+      if (socket && typeof socket.emit === 'function') {
+        if (err instanceof CustomError) socket.emit('error', { statusCode: err.statusCode, message: err.message });
+      } else {
+        console.error("Invalid socket object");
+      }
     }
   };
 };
