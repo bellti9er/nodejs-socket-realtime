@@ -22,6 +22,10 @@ function App() {
       setMessages(prev => [...prev, message]);
     });
 
+    socket.on('new_disconnect', (username: string) => {
+      setMessages(prev => [...prev, `${username} has left the chat`]);
+    });
+
     socket.on('error_message', (errorMsg: string) => {
       setMessages(prev => [...prev, `Error: ${errorMsg}`]);
     });
@@ -33,7 +37,8 @@ function App() {
   };
 
   const changeUsername = () => {
-    socket.emit('change_username', { username });  // 여기에 username 변경 로직 추가
+    socket.emit('change_username', { username });
+    setUsername("")
   };
 
   return (
